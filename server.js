@@ -1,6 +1,6 @@
 require('dotenv').config(); // Carga las variables de entorno al principio
 const express = require('express');
-const { Pool } = require('pg'); 
+const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -10,23 +10,64 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, '../public'))); 
+app.use(express.static(path.join(__dirname, '../public')));
 
-// Conexión a la base de datos usando variables de entorno
-const db = new Pool({
+// Configuración de la base de datos (con SSL dinámico para local o producción/Neon)
+const dbConfig = {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
     port: process.env.DB_PORT,
-});
+    ssl: {
+        rejectUnauthorized: false // Obligatorio para que Neon y Render permitan la conexión segura
+    }
+};
 
-db.connect((err, client, release) => {
+// Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
+if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env.DB_HOST !== 'localhost')) {
+    dbConfig.ssl = {
+        rejectUnauthorized: false
+    };
+}
+
+const db = new Pool(dbConfig);
+
+// Función automática para crear la tabla si no existe en la base de datos
+async function crearTablaSiNoExiste() {
+    const query = `
+        CREATE TABLE IF NOT EXISTS donaciones (
+            id SERIAL PRIMARY KEY,
+            tipo_donante VARCHAR(50),
+            nombre VARCHAR(150),
+            dni VARCHAR(20),
+            fecha_nacimiento VARCHAR(20),
+            correo VARCHAR(150),
+            categoria VARCHAR(100),
+            estado VARCHAR(50) DEFAULT 'Pendiente',
+            ocultar_nombre VARCHAR(10),
+            genero VARCHAR(50),
+            telefono VARCHAR(50),
+            cantidad INTEGER DEFAULT 0,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `;
+    try {
+        await db.query(query);
+        console.log('📦 Tabla "donaciones" verificada o creada correctamente.');
+    } catch (err) {
+        console.error('❌ Error al crear la tabla automáticamente:', err);
+    }
+}
+db.connect(async (err, client, release) => {
     if (err) {
         return console.error('❌ Error al conectar a PostgreSQL:', err.stack);
     }
-    console.log('✨ ¡Conectado exitosamente a la base de datos PostgreSQL hospitalguemes!');
+    console.log('✨ ¡Conectado exitosamente a la base de datos PostgreSQL!');
     release();
+
+    // Ejecutamos la creación de la tabla al iniciar
+    await crearTablaSiNoExiste();
 });
 
 let ultimaDonacionCache = null;
@@ -43,16 +84,16 @@ app.post('/api/verificar-acceso', (req, res) => {
 
 // --- 2. RUTA POST: RECIBIR Y GUARDAR DONACIÓN ---
 app.post('/api/donaciones', async (req, res) => {
-    const { 
-        tipoDonante, nombreCompleto, nombreEmpresa, dni, fechaNacimiento, 
-        correo, categoria, ocultarNombre, genero, telefono, cantidad 
+    const {
+        tipoDonante, nombreCompleto, nombreEmpresa, dni, fechaNacimiento,
+        correo, categoria, ocultarNombre, genero, telefono, cantidad
     } = req.body;
 
     const nombreFinal = (tipoDonante === 'empresa') ? nombreEmpresa : nombreCompleto;
     const dniFinal = (tipoDonante === 'persona') ? dni : null;
     const fechaNacFinal = (tipoDonante === 'persona') ? fechaNacimiento : null;
-    const ocultarFinal = ocultarNombre ? 'si' : 'no'; 
-    const generoFinal = (tipoDonante === 'persona') ? genero : null; 
+    const ocultarFinal = ocultarNombre ? 'si' : 'no';
+    const generoFinal = (tipoDonante === 'persona') ? genero : null;
     const cantidadFinal = parseInt(cantidad) || 0; // Aseguramos que sea número
 
     // 🛠️ VALIDACIÓN: Bloqueo de donación si ya existe una pendiente con ese correo
@@ -77,11 +118,10 @@ app.post('/api/donaciones', async (req, res) => {
 
     ultimaDonacionCache = claveEnvioActual;
     setTimeout(() => { ultimaDonacionCache = null; }, 2000);
-
     // INSERT SQL (Incluye la columna cantidad)
     const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad) 
                  VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10) RETURNING id`;
-    
+
     const valores = [tipoDonante, nombreFinal, dniFinal, fechaNacFinal, correo, categoria, ocultarFinal, generoFinal, telefono, cantidadFinal];
 
     db.query(sql, valores, (err, result) => {
@@ -101,7 +141,7 @@ app.get('/api/donaciones', (req, res) => {
             console.error('Error al obtener donaciones:', err);
             return res.status(500).json({ error: 'Error al obtener datos.' });
         }
-        return res.json(results.rows); 
+        return res.json(results.rows);
     });
 });
 
@@ -121,16 +161,15 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
         WHERE estado = 'Aprobado y Destinado' 
         ORDER BY id DESC
     `;
-    
+
     db.query(sql, (err, results) => {
         if (err) {
             console.error('Error al obtener el historial público:', err);
             return res.status(500).json({ error: 'Error al obtener el historial.' });
         }
-        return res.json(results.rows); 
+        return res.json(results.rows);
     });
 });
-
 // --- 4. RUTA PUT: ACTUALIZAR EL ESTADO DE LA DONACIÓN ---
 app.put('/api/donaciones/:id/estado', (req, res) => {
     const { id } = req.params;
