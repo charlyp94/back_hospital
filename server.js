@@ -59,6 +59,25 @@ async function crearTablaSiNoExiste() {
         console.error('❌ Error al crear la tabla automáticamente:', err);
     }
 }
+
+// 🧹 Función para eliminar automáticamente donaciones pendientes con más de 30 días
+async function limpiarDonacionesExpiradas() {
+    try {
+        // Resta 30 días a la fecha y hora actual de PostgreSQL
+        const query = `
+            DELETE FROM donaciones 
+            WHERE estado = 'Pendiente' 
+            AND fecha < NOW() - INTERVAL '30 days'
+        `;
+        const resultado = await db.query(query);
+        if (resultado.rowCount > 0) {
+            console.log(`🧹 Limpieza automática: Se eliminaron ${resultado.rowCount} donaciones pendientes expiradas (>30 días).`);
+        }
+    } catch (err) {
+        console.error('❌ Error al limpiar donaciones expiradas:', err);
+    }
+}
+
 db.connect(async (err, client, release) => {
     if (err) {
         return console.error('❌ Error al conectar a PostgreSQL:', err.stack);
@@ -68,6 +87,8 @@ db.connect(async (err, client, release) => {
 
     // Ejecutamos la creación de la tabla al iniciar
     await crearTablaSiNoExiste();
+    // Ejecutamos la limpieza inicial al encender
+    await limpiarDonacionesExpiradas();
 });
 
 let ultimaDonacionCache = null;
@@ -118,6 +139,7 @@ app.post('/api/donaciones', async (req, res) => {
 
     ultimaDonacionCache = claveEnvioActual;
     setTimeout(() => { ultimaDonacionCache = null; }, 2000);
+    
     // INSERT SQL (Incluye la columna cantidad)
     const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad) 
                  VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10) RETURNING id`;
@@ -134,7 +156,10 @@ app.post('/api/donaciones', async (req, res) => {
 });
 
 // --- 3. RUTA GET: OBTENER TODAS LAS DONACIONES (Para el Admin) ---
-app.get('/api/donaciones', (req, res) => {
+app.get('/api/donaciones', async (req, res) => {
+    // Limpiamos las expiradas cada vez que el admin carga o actualiza el panel
+    await limpiarDonacionesExpiradas();
+
     const sql = "SELECT * FROM donaciones ORDER BY id DESC";
     db.query(sql, (err, results) => {
         if (err) {
@@ -170,6 +195,7 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
         return res.json(results.rows);
     });
 });
+
 // --- 4. RUTA PUT: ACTUALIZAR EL ESTADO DE LA DONACIÓN ---
 app.put('/api/donaciones/:id/estado', (req, res) => {
     const { id } = req.params;
