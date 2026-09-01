@@ -1,0 +1,49 @@
+# --- DEPENDENCIAS ---
+# Carpeta de dependencias de Node.js (Backend y/o Frontend si usas Vite/React/Angular)
+node_modules/
+jspm_packages/
+
+# --- VARIABLES DE ENTORNO Y CONFIGURACIÓN ---
+# Archivos de entorno locales (¡Muy importante para que no subas tus claves de Neon o contraseñas!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- COMPILACIÓN Y CONSTRUCCIÓN (BUILD) ---
+# Si tu frontend se compila para producción (ej. React, Vite, Vue)
+dist/
+build/
+.output/
+
+# --- LOGS Y REGISTROS ---
+# Archivos de logs de Node.js, npm o errores
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- SISTEMA OPERATIVO ---
+# Archivos ocultos generados por el sistema operativo
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# --- EDITORES Y IDEAS (VS Code, etc.) ---
+# Configuraciones locales de Visual Studio Code u otros editores
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

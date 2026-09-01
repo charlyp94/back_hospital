@@ -24,7 +24,7 @@ const dbConfig = {
     }
 };
 
-// Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
+// // Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
 if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env.DB_HOST !== 'localhost')) {
     dbConfig.ssl = {
         rejectUnauthorized: false
@@ -49,7 +49,9 @@ async function crearTablaSiNoExiste() {
             genero VARCHAR(50),
             telefono VARCHAR(50),
             cantidad INTEGER DEFAULT 0,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            cuit VARCHAR(20) UNIQUE,
+            descripcion TEXT
         );
     `;
     try {
@@ -107,14 +109,15 @@ app.post('/api/verificar-acceso', (req, res) => {
 app.post('/api/donaciones', async (req, res) => {
     const {
         tipoDonante, nombreCompleto, nombreEmpresa, dni, fechaNacimiento,
-        correo, categoria, ocultarNombre, genero, telefono, cantidad
+        correo, categoria, ocultarNombre, genero, telefono, cantidad, cuit, descripcion
     } = req.body;
 
     const nombreFinal = (tipoDonante === 'empresa') ? nombreEmpresa : nombreCompleto;
     const dniFinal = (tipoDonante === 'persona') ? dni : null;
     const fechaNacFinal = (tipoDonante === 'persona') ? fechaNacimiento : null;
-    const ocultarFinal = ocultarNombre ? 'si' : 'no';
     const generoFinal = (tipoDonante === 'persona') ? genero : null;
+    const cuitFinal = (tipoDonante === 'empresa') ? cuit : null;
+    const ocultarFinal = ocultarNombre ? 'si' : 'no';
     const cantidadFinal = parseInt(cantidad) || 0; // Aseguramos que sea número
 
     // 🛠️ VALIDACIÓN: Bloqueo de donación si ya existe una pendiente con ese correo
@@ -139,12 +142,25 @@ app.post('/api/donaciones', async (req, res) => {
 
     ultimaDonacionCache = claveEnvioActual;
     setTimeout(() => { ultimaDonacionCache = null; }, 2000);
-    
-    // INSERT SQL (Incluye la columna cantidad)
-    const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad) 
-                 VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10) RETURNING id`;
 
-    const valores = [tipoDonante, nombreFinal, dniFinal, fechaNacFinal, correo, categoria, ocultarFinal, generoFinal, telefono, cantidadFinal];
+    // INSERT SQL (Incluye cuit y descripcion)
+    const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad, cuit, descripcion) 
+                 VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10, $11, $12) RETURNING id`;
+
+    const valores = [
+        tipoDonante,
+        nombreFinal,
+        dniFinal,
+        fechaNacFinal,
+        correo,
+        categoria,
+        ocultarFinal,
+        generoFinal,
+        telefono,
+        cantidadFinal,
+        cuitFinal,
+        descripcion
+    ];
 
     db.query(sql, valores, (err, result) => {
         if (err) {
@@ -181,7 +197,8 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
             END AS nombre, 
             categoria, 
             fecha,
-            cantidad
+            cantidad,
+            descripcion
         FROM donaciones 
         WHERE estado = 'Aprobado y Destinado' 
         ORDER BY id DESC
