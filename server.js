@@ -24,7 +24,7 @@ const dbConfig = {
     }
 };
 
-// // Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
+// Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
 if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env.DB_HOST !== 'localhost')) {
     dbConfig.ssl = {
         rejectUnauthorized: false
@@ -33,9 +33,9 @@ if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env
 
 const db = new Pool(dbConfig);
 
-// Función automática para crear la tabla si no existe en la base de datos
-async function crearTablaSiNoExiste() {
-    const query = `
+// Función automática para crear las tablas si no existen en la base de datos
+async function crearTablasSiNoExisten() {
+    const queryDonaciones = `
         CREATE TABLE IF NOT EXISTS donaciones (
             id SERIAL PRIMARY KEY,
             tipo_donante VARCHAR(50),
@@ -54,18 +54,30 @@ async function crearTablaSiNoExiste() {
             descripcion TEXT
         );
     `;
+
+    const queryUsuarios = `
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id SERIAL PRIMARY KEY,
+            nombre_usuario VARCHAR(50) UNIQUE NOT NULL,
+            dni VARCHAR(20) UNIQUE NOT NULL,
+            nombre VARCHAR(150) NOT NULL,
+            contrasena VARCHAR(255) NOT NULL,
+            rol VARCHAR(20) NOT NULL DEFAULT 'usuario'
+        );
+    `;
+
     try {
-        await db.query(query);
-        console.log('📦 Tabla "donaciones" verificada o creada correctamente.');
+        await db.query(queryDonaciones);
+        await db.query(queryUsuarios);
+        console.log('📦 Tablas "donaciones" y "usuarios" verificadas o creadas correctamente.');
     } catch (err) {
-        console.error('❌ Error al crear la tabla automáticamente:', err);
+        console.error('❌ Error al crear las tablas automáticamente:', err);
     }
 }
 
 // 🧹 Función para eliminar automáticamente donaciones pendientes con más de 30 días
 async function limpiarDonacionesExpiradas() {
     try {
-        // Resta 30 días a la fecha y hora actual de PostgreSQL
         const query = `
             DELETE FROM donaciones 
             WHERE estado = 'Pendiente' 
@@ -87,21 +99,43 @@ db.connect(async (err, client, release) => {
     console.log('✨ ¡Conectado exitosamente a la base de datos PostgreSQL!');
     release();
 
-    // Ejecutamos la creación de la tabla al iniciar
-    await crearTablaSiNoExiste();
+    // Ejecutamos la creación de las tablas al iniciar
+    await crearTablasSiNoExisten();
     // Ejecutamos la limpieza inicial al encender
     await limpiarDonacionesExpiradas();
 });
 
 let ultimaDonacionCache = null;
 
-// --- RUTA DE SEGURIDAD PARA ACCESO AL PANEL ---
-app.post('/api/verificar-acceso', (req, res) => {
-    const { clave } = req.body;
-    if (clave === process.env.ADMIN_PASSWORD) {
-        res.json({ accesoConcedido: true });
-    } else {
-        res.json({ accesoConcedido: false });
+// --- RUTA DE LOGIN PARA EL SISTEMA DE ROLES (RBAC) ---
+app.post('/api/login', async (req, res) => {
+    const { nombre_usuario, contrasena } = req.body;
+
+    try {
+        const query = 'SELECT * FROM usuarios WHERE nombre_usuario = $1';
+        const resultado = await db.query(query, [nombre_usuario]);
+
+        if (resultado.rows.length === 0) {
+            return res.status(401).json({ error: 'El usuario no existe.' });
+        }
+
+        const usuario = resultado.rows[0];
+
+        // Validación de contraseña
+        if (contrasena !== usuario.contrasena) {
+            return res.status(401).json({ error: 'Contraseña incorrecta.' });
+        }
+
+        // Devolvemos los datos del usuario y su rol para que el frontend decida a dónde redirigir
+        return res.json({
+            mensaje: 'Login exitoso',
+            nombre: usuario.nombre,
+            rol: usuario.rol // 'superadmin', 'admin' o 'usuario'
+        });
+
+    } catch (err) {
+        console.error('Error en el login:', err);
+        return res.status(500).json({ error: 'Error interno en el servidor.' });
     }
 });
 
@@ -118,9 +152,8 @@ app.post('/api/donaciones', async (req, res) => {
     const generoFinal = (tipoDonante === 'persona') ? genero : null;
     const cuitFinal = (tipoDonante === 'empresa') ? cuit : null;
     const ocultarFinal = ocultarNombre ? 'si' : 'no';
-    const cantidadFinal = parseInt(cantidad) || 0; // Aseguramos que sea número
+    const cantidadFinal = parseInt(cantidad) || 0;
 
-    // 🛠️ VALIDACIÓN: Bloqueo de donación si ya existe una pendiente con ese correo
     try {
         const checkSql = "SELECT id FROM donaciones WHERE correo = $1 AND estado = 'Pendiente' LIMIT 1";
         const checkResult = await db.query(checkSql, [correo]);
@@ -133,7 +166,6 @@ app.post('/api/donaciones', async (req, res) => {
         return res.status(500).json({ error: 'Error interno al verificar estado de donaciones.' });
     }
 
-    // Lógica original de anti-duplicidad por caché rápido
     const claveEnvioActual = `${correo}-${categoria}-${nombreFinal}`;
     if (ultimaDonacionCache === claveEnvioActual) {
         console.log('⚠️ Petición duplicada bloqueada en el servidor.');
@@ -143,7 +175,6 @@ app.post('/api/donaciones', async (req, res) => {
     ultimaDonacionCache = claveEnvioActual;
     setTimeout(() => { ultimaDonacionCache = null; }, 2000);
 
-    // INSERT SQL (Incluye cuit y descripcion)
     const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad, cuit, descripcion) 
                  VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10, $11, $12) RETURNING id`;
 
@@ -173,7 +204,6 @@ app.post('/api/donaciones', async (req, res) => {
 
 // --- 3. RUTA GET: OBTENER TODAS LAS DONACIONES (Para el Admin) ---
 app.get('/api/donaciones', async (req, res) => {
-    // Limpiamos las expiradas cada vez que el admin carga o actualiza el panel
     await limpiarDonacionesExpiradas();
 
     const sql = "SELECT * FROM donaciones ORDER BY id DESC";
