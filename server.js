@@ -259,7 +259,7 @@ app.get('/api/usuarios', async (req, res) => {
     }
 });
 
-// POST: Crear un nuevo usuario (Recibe y valida el DNI del formulario)
+// POST: Crear un nuevo usuario (Con reporte detallado de errores de BD)
 app.post('/api/usuarios', async (req, res) => {
     const { nombre_usuario, nombre, contrasena, rol, dni } = req.body;
     const rolFinal = rol || 'usuario';
@@ -284,8 +284,8 @@ app.post('/api/usuarios', async (req, res) => {
             usuario: resultado.rows[0] 
         });
     } catch (err) {
-        console.error('Error al crear usuario:', err);
-        return res.status(500).json({ error: 'Error al crear el usuario en la base de datos.' });
+        console.error('Error detallado al crear usuario:', err);
+        return res.status(500).json({ error: `Error de BD: ${err.message}` });
     }
 });
 
