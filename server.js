@@ -221,28 +221,62 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
     });
 });
 
-// --- RUTA PUT: ESTADO DONACIÓN ---
-app.put('/api/donaciones/:id/estado', (req, res) => {
+// --- RUTA PUT: ESTADO DONACIÓN (Flujo estricto: Pendiente -> Recibido -> Aprobado y Destinado o Rechazado con motivo) ---
+app.put('/api/donaciones/:id/estado', async (req, res) => {
     const { id } = req.params;
-    const { estado } = req.body;
+    const { estado, motivoRechazo } = req.body;
     const nuevoEstado = estado || req.body.nuevoEstado;
-    const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado', 'Aprobado', 'Rechazado'];
     
+    const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado', 'Rechazado'];
     if (!statesPermitidos.includes(nuevoEstado)) {
         return res.status(400).json({ error: 'Estado no válido.' });
     }
 
-    const sql = `UPDATE donaciones SET estado = $1 WHERE id = $2`;
-    db.query(sql, [nuevoEstado, id], (err, result) => {
-        if (err) {
-            console.error(err);
-            return res.status(500).json({ error: 'Error al actualizar estado.' });
-        }
-        if (result.rowCount === 0) {
+    try {
+        const checkSql = "SELECT estado, descripcion FROM donaciones WHERE id = $1";
+        const checkRes = await db.query(checkSql, [id]);
+
+        if (checkRes.rows.length === 0) {
             return res.status(404).json({ error: 'Donación no encontrada.' });
         }
+
+        const estadoActual = checkRes.rows[0].estado || 'Pendiente';
+
+        // Si ya está en un estado final, bloquear completamente
+        if (estadoActual === 'Aprobado y Destinado' || estadoActual === 'Rechazado') {
+            return res.status(400).json({ error: `Esta donación ya fue cerrada como "${estadoActual}" y no se puede modificar.` });
+        }
+
+        // Validar el flujo: Pendiente -> Recibido
+        if (estadoActual === 'Pendiente' && nuevoEstado !== 'Recibido') {
+            return res.status(400).json({ error: 'Una donación Pendiente solo puede pasar al estado "Recibido".' });
+        }
+
+        // Validar el flujo: Recibido -> Aprobado y Destinado o Rechazado
+        if (estadoActual === 'Recibido' && (nuevoEstado !== 'Aprobado y Destinado' && nuevoEstado !== 'Rechazado')) {
+            return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
+        }
+
+        let sql = `UPDATE donaciones SET estado = $1 WHERE id = $2`;
+        let valores = [nuevoEstado, id];
+
+        if (nuevoEstado === 'Rechazado') {
+            if (!motivoRechazo || motivoRechazo.trim() === '') {
+                return res.status(400).json({ error: 'Debe especificar el motivo del rechazo.' });
+            }
+            const descripcionAnterior = checkRes.rows[0].descripcion || '';
+            const descripcionConMotivo = `${descripcionAnterior} | [RECHAZADO: ${motivoRechazo.trim()}]`;
+            
+            sql = `UPDATE donaciones SET estado = $1, descripcion = $3 WHERE id = $2`;
+            valores = [nuevoEstado, id, descripcionConMotivo];
+        }
+
+        await db.query(sql, valores);
         return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado });
-    });
+    } catch (err) {
+        console.error('Error al actualizar estado:', err);
+        return res.status(500).json({ error: 'Error al actualizar estado.' });
+    }
 });
 
 // --- RUTAS DE GESTIÓN DE USUARIOS ---
@@ -259,13 +293,12 @@ app.get('/api/usuarios', async (req, res) => {
     }
 });
 
-// POST: Crear un nuevo usuario (Con reporte detallado de errores de BD)
+// POST: Crear un nuevo usuario
 app.post('/api/usuarios', async (req, res) => {
     const { nombre_usuario, nombre, contrasena, rol, dni } = req.body;
     const rolFinal = rol || 'usuario';
 
     try {
-        // Verificar si ya existe el nombre de usuario o el DNI
         const check = await db.query("SELECT id FROM usuarios WHERE nombre_usuario = $1 OR dni = $2", [nombre_usuario, dni]);
         if (check.rows.length > 0) {
             return res.status(400).json({ error: 'El nombre de usuario o el DNI ya se encuentran registrados.' });
