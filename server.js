@@ -49,7 +49,8 @@ async function crearTablasSiNoExisten() {
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             cuit VARCHAR(20) UNIQUE,
             descripcion TEXT,
-            actualizado_por VARCHAR(20)
+            actualizado_por VARCHAR(100),
+            fecha_actualizacion TIMESTAMP
         );
     `;
 
@@ -255,11 +256,14 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
         }
 
-        // Cortamos el nombre del usuario a un máximo de 20 caracteres por si supera el límite de VARCHAR(20)
-        const responsableFinal = actualizado_por ? String(actualizado_por).substring(0, 20) : 'Admin';
+        // Tomamos el nombre completo sin recortar (o por defecto 'Sistema' si viene vacío)
+        const responsableFinal = actualizado_por ? String(actualizado_por).trim() : 'Sistema';
+        
+        // Obtenemos la fecha y hora exacta actual para registrar el momento de la modificación
+        const fechaHoraActual = new Date();
 
-        let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3 WHERE id = $2`;
-        let valores = [nuevoEstado, id, responsableFinal];
+        let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4 WHERE id = $2`;
+        let valores = [nuevoEstado, id, responsableFinal, fechaHoraActual];
 
         if (nuevoEstado === 'Rechazado') {
             if (!motivoRechazo || motivoRechazo.trim() === '') {
@@ -268,12 +272,12 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             const descripcionAnterior = checkRes.rows[0].descripcion || '';
             const descripcionConMotivo = `${descripcionAnterior} | [RECHAZADO: ${motivoRechazo.trim()}]`;
             
-            sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, descripcion = $4 WHERE id = $2`;
-            valores = [nuevoEstado, id, responsableFinal, descripcionConMotivo];
+            sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4, descripcion = $5 WHERE id = $2`;
+            valores = [nuevoEstado, id, responsableFinal, fechaHoraActual, descripcionConMotivo];
         }
 
         await db.query(sql, valores);
-        return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado });
+        return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado, fecha_actualizacion: fechaHoraActual });
     } catch (err) {
         console.error('Error al actualizar estado:', err);
         return res.status(500).json({ error: 'Error al actualizar estado.' });
