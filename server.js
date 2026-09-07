@@ -1,4 +1,4 @@
-require('dotenv').config(); // Carga las variables de entorno al principio
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -12,7 +12,6 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Configuración de la base de datos (con SSL dinámico para local o producción/Neon)
 const dbConfig = {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -20,11 +19,10 @@ const dbConfig = {
     database: process.env.DB_DATABASE,
     port: process.env.DB_PORT,
     ssl: {
-        rejectUnauthorized: false // Obligatorio para que Neon y Render permitan la conexión segura
+        rejectUnauthorized: false
     }
 };
 
-// Si el host no es localhost (es decir, apunta a Neon en la nube), activamos SSL
 if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env.DB_HOST !== 'localhost')) {
     dbConfig.ssl = {
         rejectUnauthorized: false
@@ -33,7 +31,6 @@ if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env
 
 const db = new Pool(dbConfig);
 
-// Función automática para crear las tablas si no existen en la base de datos
 async function crearTablasSiNoExisten() {
     const queryDonaciones = `
         CREATE TABLE IF NOT EXISTS donaciones (
@@ -75,7 +72,6 @@ async function crearTablasSiNoExisten() {
     }
 }
 
-// 🧹 Función para eliminar automáticamente donaciones pendientes con más de 30 días
 async function limpiarDonacionesExpiradas() {
     try {
         const query = `
@@ -85,7 +81,7 @@ async function limpiarDonacionesExpiradas() {
         `;
         const resultado = await db.query(query);
         if (resultado.rowCount > 0) {
-            console.log(`🧹 Limpieza automática: Se eliminaron ${resultado.rowCount} donaciones pendientes expiradas (>30 días).`);
+            console.log(`🧹 Limpieza automática: Se eliminaron ${resultado.rowCount} donaciones pendientes expiradas.`);
         }
     } catch (err) {
         console.error('❌ Error al limpiar donaciones expiradas:', err);
@@ -99,15 +95,13 @@ db.connect(async (err, client, release) => {
     console.log('✨ ¡Conectado exitosamente a la base de datos PostgreSQL!');
     release();
 
-    // Ejecutamos la creación de las tablas al iniciar
     await crearTablasSiNoExisten();
-    // Ejecutamos la limpieza inicial al encender
     await limpiarDonacionesExpiradas();
 });
 
 let ultimaDonacionCache = null;
 
-// --- RUTA DE LOGIN PARA EL SISTEMA DE ROLES (RBAC) ---
+// --- RUTA DE LOGIN ---
 app.post('/api/login', async (req, res) => {
     const { nombre_usuario, contrasena } = req.body;
 
@@ -121,16 +115,14 @@ app.post('/api/login', async (req, res) => {
 
         const usuario = resultado.rows[0];
 
-        // Validación de contraseña
         if (contrasena !== usuario.contrasena) {
             return res.status(401).json({ error: 'Contraseña incorrecta.' });
         }
 
-        // Devolvemos los datos del usuario y su rol para que el frontend decida a dónde redirigir
         return res.json({
             mensaje: 'Login exitoso',
             nombre: usuario.nombre,
-            rol: usuario.rol // 'superadmin', 'admin' o 'usuario'
+            rol: usuario.rol
         });
 
     } catch (err) {
@@ -139,7 +131,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- 2. RUTA POST: RECIBIR Y GUARDAR DONACIÓN ---
+// --- RUTA POST: DONACIONES ---
 app.post('/api/donaciones', async (req, res) => {
     const {
         tipoDonante, nombreCompleto, nombreEmpresa, dni, fechaNacimiento,
@@ -159,16 +151,15 @@ app.post('/api/donaciones', async (req, res) => {
         const checkResult = await db.query(checkSql, [correo]);
 
         if (checkResult.rows.length > 0) {
-            return res.status(400).json({ error: "Ya tienes una donación pendiente en proceso. Por favor, espera a que sea aprobada antes de realizar una nueva." });
+            return res.status(400).json({ error: "Ya tienes una donación pendiente en proceso." });
         }
     } catch (err) {
-        console.error('Error al validar donación pendiente:', err);
-        return res.status(500).json({ error: 'Error interno al verificar estado de donaciones.' });
+        console.error('Error al validar donación:', err);
+        return res.status(500).json({ error: 'Error interno al verificar estado.' });
     }
 
     const claveEnvioActual = `${correo}-${categoria}-${nombreFinal}`;
     if (ultimaDonacionCache === claveEnvioActual) {
-        console.log('⚠️ Petición duplicada bloqueada en el servidor.');
         return res.status(200).json({ mensaje: 'Donación ya procesada anteriormente.', duplicado: true });
     }
 
@@ -178,20 +169,7 @@ app.post('/api/donaciones', async (req, res) => {
     const sql = `INSERT INTO donaciones (tipo_donante, nombre, dni, fecha_nacimiento, correo, categoria, estado, ocultar_nombre, genero, telefono, cantidad, cuit, descripcion) 
                  VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente', $7, $8, $9, $10, $11, $12) RETURNING id`;
 
-    const valores = [
-        tipoDonante,
-        nombreFinal,
-        dniFinal,
-        fechaNacFinal,
-        correo,
-        categoria,
-        ocultarFinal,
-        generoFinal,
-        telefono,
-        cantidadFinal,
-        cuitFinal,
-        descripcion
-    ];
+    const valores = [tipoDonante, nombreFinal, dniFinal, fechaNacFinal, correo, categoria, ocultarFinal, generoFinal, telefono, cantidadFinal, cuitFinal, descripcion];
 
     db.query(sql, valores, (err, result) => {
         if (err) {
@@ -202,7 +180,7 @@ app.post('/api/donaciones', async (req, res) => {
     });
 });
 
-// --- 3. RUTA GET: OBTENER TODAS LAS DONACIONES (Para el Admin) ---
+// --- RUTA GET: OBTENER DONACIONES ---
 app.get('/api/donaciones', async (req, res) => {
     await limpiarDonacionesExpiradas();
 
@@ -216,7 +194,7 @@ app.get('/api/donaciones', async (req, res) => {
     });
 });
 
-// --- RUTA GET PÚBLICA: OBTENER DONACIONES APROBADAS ---
+// --- RUTA GET PÚBLICA: APROBADAS ---
 app.get('/api/donaciones/aprobadas', (req, res) => {
     const sql = `
         SELECT 
@@ -236,18 +214,17 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
 
     db.query(sql, (err, results) => {
         if (err) {
-            console.error('Error al obtener el historial público:', err);
-            return res.status(500).json({ error: 'Error al obtener el historial.' });
+            console.error('Error al obtener historial público:', err);
+            return res.status(500).json({ error: 'Error al obtener historial.' });
         }
         return res.json(results.rows);
     });
 });
 
-// --- 4. RUTA PUT: ACTUALIZAR EL ESTADO DE LA DONACIÓN ---
+// --- RUTA PUT: ESTADO DONACIÓN ---
 app.put('/api/donaciones/:id/estado', (req, res) => {
     const { id } = req.params;
-    const { estado } = req.body; // Adaptado para recibir 'estado' desde el frontend
-
+    const { estado } = req.body;
     const nuevoEstado = estado || req.body.nuevoEstado;
     const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado', 'Aprobado', 'Rechazado'];
     
@@ -268,7 +245,7 @@ app.put('/api/donaciones/:id/estado', (req, res) => {
     });
 });
 
-// --- 5. RUTAS DE GESTIÓN DE USUARIOS (Para el Superadmin) ---
+// --- RUTAS DE GESTIÓN DE USUARIOS ---
 
 // GET: Obtener todos los usuarios
 app.get('/api/usuarios', async (req, res) => {
@@ -282,25 +259,24 @@ app.get('/api/usuarios', async (req, res) => {
     }
 });
 
-// POST: Crear un nuevo usuario
+// POST: Crear un nuevo usuario (Recibe y valida el DNI del formulario)
 app.post('/api/usuarios', async (req, res) => {
     const { nombre_usuario, nombre, contrasena, rol, dni } = req.body;
     const rolFinal = rol || 'usuario';
-    // Si no mandan DNI desde el form de superadmin, generamos uno temporal único basado en la fecha actual para cumplir con la base de datos
-    const dniFinal = dni || `DNI-${Date.now().toString().slice(-8)}`;
 
     try {
-        const check = await db.query("SELECT id FROM usuarios WHERE nombre_usuario = $1", [nombre_usuario]);
+        // Verificar si ya existe el nombre de usuario o el DNI
+        const check = await db.query("SELECT id FROM usuarios WHERE nombre_usuario = $1 OR dni = $2", [nombre_usuario, dni]);
         if (check.rows.length > 0) {
-            return res.status(400).json({ error: 'El nombre de usuario ya se encuentra registrado.' });
+            return res.status(400).json({ error: 'El nombre de usuario o el DNI ya se encuentran registrados.' });
         }
 
         const sql = `
             INSERT INTO usuarios (nombre_usuario, dni, nombre, contrasena, rol) 
             VALUES ($1, $2, $3, $4, $5) 
-            RETURNING id, nombre_usuario, nombre, rol
+            RETURNING id, nombre_usuario, dni, nombre, rol
         `;
-        const valores = [nombre_usuario, dniFinal, nombre, contrasena, rolFinal];
+        const valores = [nombre_usuario, dni, nombre, contrasena, rolFinal];
         const resultado = await db.query(sql, valores);
 
         return res.status(201).json({ 
@@ -313,7 +289,7 @@ app.post('/api/usuarios', async (req, res) => {
     }
 });
 
-// DELETE: Eliminar un usuario por ID
+// DELETE: Eliminar usuario por ID
 app.delete('/api/usuarios/:id', async (req, res) => {
     const { id } = req.params;
 
