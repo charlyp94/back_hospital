@@ -48,7 +48,8 @@ async function crearTablasSiNoExisten() {
             cantidad INTEGER DEFAULT 0,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             cuit VARCHAR(20) UNIQUE,
-            descripcion TEXT
+            descripcion TEXT,
+            actualizado_por VARCHAR(20)
         );
     `;
 
@@ -221,10 +222,10 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
     });
 });
 
-// --- RUTA PUT: ESTADO DONACIÓN (Flujo estricto: Pendiente -> Recibido -> Aprobado y Destinado o Rechazado con motivo) ---
+// --- RUTA PUT: ESTADO DONACIÓN ---
 app.put('/api/donaciones/:id/estado', async (req, res) => {
     const { id } = req.params;
-    const { estado, motivoRechazo } = req.body;
+    const { estado, motivoRechazo, actualizado_por } = req.body;
     const nuevoEstado = estado || req.body.nuevoEstado;
     
     const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado', 'Rechazado'];
@@ -242,23 +243,23 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
 
         const estadoActual = checkRes.rows[0].estado || 'Pendiente';
 
-        // Si ya está en un estado final, bloquear completamente
         if (estadoActual === 'Aprobado y Destinado' || estadoActual === 'Rechazado') {
             return res.status(400).json({ error: `Esta donación ya fue cerrada como "${estadoActual}" y no se puede modificar.` });
         }
 
-        // Validar el flujo: Pendiente -> Recibido
         if (estadoActual === 'Pendiente' && nuevoEstado !== 'Recibido') {
             return res.status(400).json({ error: 'Una donación Pendiente solo puede pasar al estado "Recibido".' });
         }
 
-        // Validar el flujo: Recibido -> Aprobado y Destinado o Rechazado
         if (estadoActual === 'Recibido' && (nuevoEstado !== 'Aprobado y Destinado' && nuevoEstado !== 'Rechazado')) {
             return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
         }
 
-        let sql = `UPDATE donaciones SET estado = $1 WHERE id = $2`;
-        let valores = [nuevoEstado, id];
+        // Cortamos el nombre del usuario a un máximo de 20 caracteres por si supera el límite de VARCHAR(20)
+        const responsableFinal = actualizado_por ? String(actualizado_por).substring(0, 20) : 'Admin';
+
+        let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3 WHERE id = $2`;
+        let valores = [nuevoEstado, id, responsableFinal];
 
         if (nuevoEstado === 'Rechazado') {
             if (!motivoRechazo || motivoRechazo.trim() === '') {
@@ -267,8 +268,8 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             const descripcionAnterior = checkRes.rows[0].descripcion || '';
             const descripcionConMotivo = `${descripcionAnterior} | [RECHAZADO: ${motivoRechazo.trim()}]`;
             
-            sql = `UPDATE donaciones SET estado = $1, descripcion = $3 WHERE id = $2`;
-            valores = [nuevoEstado, id, descripcionConMotivo];
+            sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, descripcion = $4 WHERE id = $2`;
+            valores = [nuevoEstado, id, responsableFinal, descripcionConMotivo];
         }
 
         await db.query(sql, valores);
