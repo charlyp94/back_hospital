@@ -246,9 +246,11 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
 // --- 4. RUTA PUT: ACTUALIZAR EL ESTADO DE LA DONACIÓN ---
 app.put('/api/donaciones/:id/estado', (req, res) => {
     const { id } = req.params;
-    const { nuevoEstado } = req.body;
+    const { estado } = req.body; // Adaptado para recibir 'estado' desde el frontend
 
-    const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado'];
+    const nuevoEstado = estado || req.body.nuevoEstado;
+    const statesPermitidos = ['Pendiente', 'Recibido', 'Aprobado y Destinado', 'Aprobado', 'Rechazado'];
+    
     if (!statesPermitidos.includes(nuevoEstado)) {
         return res.status(400).json({ error: 'Estado no válido.' });
     }
@@ -264,6 +266,70 @@ app.put('/api/donaciones/:id/estado', (req, res) => {
         }
         return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado });
     });
+});
+
+// --- 5. RUTAS DE GESTIÓN DE USUARIOS (Para el Superadmin) ---
+
+// GET: Obtener todos los usuarios
+app.get('/api/usuarios', async (req, res) => {
+    try {
+        const sql = "SELECT id, nombre_usuario, dni, nombre, rol FROM usuarios ORDER BY id DESC";
+        const resultado = await db.query(sql);
+        return res.json(resultado.rows);
+    } catch (err) {
+        console.error('Error al obtener usuarios:', err);
+        return res.status(500).json({ error: 'Error al obtener usuarios.' });
+    }
+});
+
+// POST: Crear un nuevo usuario
+app.post('/api/usuarios', async (req, res) => {
+    const { nombre_usuario, nombre, contrasena, rol, dni } = req.body;
+    const rolFinal = rol || 'usuario';
+    // Si no mandan DNI desde el form de superadmin, generamos uno temporal único basado en la fecha actual para cumplir con la base de datos
+    const dniFinal = dni || `DNI-${Date.now().toString().slice(-8)}`;
+
+    try {
+        const check = await db.query("SELECT id FROM usuarios WHERE nombre_usuario = $1", [nombre_usuario]);
+        if (check.rows.length > 0) {
+            return res.status(400).json({ error: 'El nombre de usuario ya se encuentra registrado.' });
+        }
+
+        const sql = `
+            INSERT INTO usuarios (nombre_usuario, dni, nombre, contrasena, rol) 
+            VALUES ($1, $2, $3, $4, $5) 
+            RETURNING id, nombre_usuario, nombre, rol
+        `;
+        const valores = [nombre_usuario, dniFinal, nombre, contrasena, rolFinal];
+        const resultado = await db.query(sql, valores);
+
+        return res.status(201).json({ 
+            mensaje: 'Usuario creado exitosamente', 
+            usuario: resultado.rows[0] 
+        });
+    } catch (err) {
+        console.error('Error al crear usuario:', err);
+        return res.status(500).json({ error: 'Error al crear el usuario en la base de datos.' });
+    }
+});
+
+// DELETE: Eliminar un usuario por ID
+app.delete('/api/usuarios/:id', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const sql = "DELETE FROM usuarios WHERE id = $1";
+        const resultado = await db.query(sql, [id]);
+
+        if (resultado.rowCount === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado.' });
+        }
+
+        return res.json({ mensaje: 'Usuario eliminado correctamente.' });
+    } catch (err) {
+        console.error('Error al eliminar usuario:', err);
+        return res.status(500).json({ error: 'Error al eliminar el usuario.' });
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
