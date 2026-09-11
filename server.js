@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,54 @@ if (process.env.NODE_ENV === 'production' || (process.env.DB_HOST && process.env
 }
 
 const db = new Pool(dbConfig);
+
+// --- CONFIGURACIÓN DE NODEMAILER ---
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.CORREO_USER || 'tu_correo_hospital@gmail.com',         // Correo del hospital (idealmente por variable de entorno)
+        pass: process.env.CORREO_PASS || 'tu_contraseña_de_aplicacion'           // Contraseña de aplicación de Google
+    }
+});
+
+// Función para enviar correos según el estado de la donación
+async function enviarCorreoEstado(correoDonante, nombreDonante, estado, motivo) {
+    let asunto = '';
+    let mensajeHtml = '';
+
+    if (estado === 'Aprobado y Destinado') {
+        asunto = '¡Donación Aprobada!';
+        mensajeHtml = `
+            <h3>¡Hola, ${nombreDonante || 'Donante'}!</h3>
+            <p>Felicidades, tu donación ha sido aprobada y próximamente será destinada al sector correspondiente del hospital.</p>
+            <p>¡Muchas gracias por tu valiosa colaboración!</p>
+        `;
+    } else if (estado === 'Rechazado') {
+        asunto = 'Actualización sobre tu donación';
+        mensajeHtml = `
+            <h3>Hola, ${nombreDonante || 'Donante'}</h3>
+            <p>Lamentamos informarte que tu donación ha sido rechazada.</p>
+            <p><strong>Motivo:</strong> ${motivo || 'No especificado'}</p>
+            <p>Agradecemos de todas formas tu intención de colaborar con el hospital.</p>
+        `;
+    }
+
+    if (asunto && correoDonante) {
+        const mailOptions = {
+            from: '"Gestión Hospitalaria" <tu_correo_hospital@gmail.com>',
+            to: correoDonante,
+            subject: asunto,
+            html: mensajeHtml
+        };
+
+        try {
+            await transporter.sendMail(mailOptions);
+            console.log('Correo enviado exitosamente a:', correoDonante);
+        } catch (error) {
+            console.error('Error al enviar el correo:', error);
+        }
+    }
+}
 
 async function crearTablasSiNoExisten() {
     const queryDonaciones = `
@@ -235,14 +284,17 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
     }
 
     try {
-        const checkSql = "SELECT estado, descripcion FROM donaciones WHERE id = $1";
+        const checkSql = "SELECT estado, descripcion, correo, nombre FROM donaciones WHERE id = $1";
         const checkRes = await db.query(checkSql, [id]);
 
         if (checkRes.rows.length === 0) {
             return res.status(404).json({ error: 'Donación no encontrada.' });
         }
 
-        const estadoActual = checkRes.rows[0].estado || 'Pendiente';
+        const donacionActual = checkRes.rows[0];
+        const estadoActual = donacionActual.estado || 'Pendiente';
+        const correoDonante = donacionActual.correo;
+        const nombreDonante = donacionActual.nombre;
 
         if (estadoActual === 'Aprobado y Destinado' || estadoActual === 'Rechazado') {
             return res.status(400).json({ error: `Esta donación ya fue cerrada como "${estadoActual}" y no se puede modificar.` });
@@ -256,10 +308,7 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
         }
 
-        // Tomamos el nombre completo sin recortar (o por defecto 'Sistema' si viene vacío)
         const responsableFinal = actualizado_por ? String(actualizado_por).trim() : 'Sistema';
-        
-        // Obtenemos la fecha y hora exacta actual para registrar el momento de la modificación
         const fechaHoraActual = new Date();
 
         let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4 WHERE id = $2`;
@@ -269,7 +318,7 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             if (!motivoRechazo || motivoRechazo.trim() === '') {
                 return res.status(400).json({ error: 'Debe especificar el motivo del rechazo.' });
             }
-            const descripcionAnterior = checkRes.rows[0].descripcion || '';
+            const descripcionAnterior = donacionActual.descripcion || '';
             const descripcionConMotivo = `${descripcionAnterior} | [RECHAZADO: ${motivoRechazo.trim()}]`;
             
             sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4, descripcion = $5 WHERE id = $2`;
@@ -277,6 +326,12 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
         }
 
         await db.query(sql, valores);
+
+        // Envío automático de correo si pasa a Aprobado y Destinado o Rechazado
+        if (nuevoEstado === 'Aprobado y Destinado' || nuevoEstado === 'Rechazado') {
+            await enviarCorreoEstado(correoDonante, nombreDonante, nuevoEstado, motivoRechazo);
+        }
+
         return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado, fecha_actualizacion: fechaHoraActual });
     } catch (err) {
         console.error('Error al actualizar estado:', err);
