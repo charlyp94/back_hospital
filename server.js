@@ -13,13 +13,20 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// --- CONFIGURACIÓN DE CORREO (Nodemailer con .env) ---
+// --- CONFIGURACIÓN DE CORREO (Nodemailer adaptado para Render - Puerto 587) ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // false para puerto 587
     auth: {
         user: process.env.EMAIL_USER,     // Lee el correo desde el .env
         pass: process.env.EMAIL_PASSWORD  // Lee la contraseña desde el .env
-    }
+    },
+    tls: {
+        rejectUnauthorized: false
+    },
+    socketTimeout: 60000,
+    connectionTimeout: 60000
 });
 
 // Función auxiliar para enviar correos
