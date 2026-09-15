@@ -13,15 +13,15 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// --- CONFIGURACIÓN DE CORREO (Nodemailer adaptado para Render - Puerto 587) ---
+// --- CONFIGURACIÓN DE CORREO (Forzando IP de Google para evitar bloqueo IPv6 en Render) ---
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    host: '142.250.153.108', // IP fija IPv4 de los servidores SMTP de Google
     port: 587,
     secure: false, // false para puerto 587
-    family: 4, // Forzar IPv4
+    servername: 'smtp.gmail.com', // Vital para que el certificado SSL coincida con Gmail
     auth: {
-        user: process.env.EMAIL_USER,     // Lee el correo desde el .env
-        pass: process.env.EMAIL_PASSWORD  // Lee la contraseña desde el .env
+        user: process.env.EMAIL_USER,    // Lee el correo desde el .env (configurado en Render)
+        pass: process.env.EMAIL_PASSWORD  // Lee la contraseña desde el .env (configurado en Render)
     },
     tls: {
         rejectUnauthorized: false
