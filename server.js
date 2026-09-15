@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
-const nodemailer = require('nodemailer'); // <-- Importamos nodemailer
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,40 +12,6 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// --- CONFIGURACIÓN DE CORREO (Forzando IP de Google para evitar bloqueo IPv6 en Render) ---
-const transporter = nodemailer.createTransport({
-    host: '142.250.153.108', // IP fija IPv4 de los servidores SMTP de Google
-    port: 587,
-    secure: false, // false para puerto 587
-    servername: 'smtp.gmail.com', // Vital para que el certificado SSL coincida con Gmail
-    auth: {
-        user: process.env.EMAIL_USER,    // Lee el correo desde el .env (configurado en Render)
-        pass: process.env.EMAIL_PASSWORD  // Lee la contraseña desde el .env (configurado en Render)
-    },
-    tls: {
-        rejectUnauthorized: false
-    },
-    socketTimeout: 60000,
-    connectionTimeout: 60000
-});
-
-// Función auxiliar para enviar correos
-async function enviarCorreo(destinatario, asunto, texto) {
-    if (!destinatario) return; // Si no hay correo, no enviamos nada
-    try {
-        await transporter.sendMail({
-            from: `"Hospital Güemes - Donaciones" <${process.env.EMAIL_USER}>`,
-            to: destinatario,
-            subject: asunto,
-            text: texto,
-        });
-        console.log(`📧 Correo enviado a ${destinatario} - Asunto: "${asunto}"`);
-    } catch (error) {
-        console.error(`❌ Error al enviar correo a ${destinatario}:`, error);
-    }
-}
-
-// --- CONFIGURACIÓN DE BASE DE DATOS ---
 const dbConfig = {
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -213,12 +178,6 @@ app.post('/api/donaciones', async (req, res) => {
             console.error('Error al insertar donación:', err);
             return res.status(500).json({ error: 'Error al guardar la donación.' });
         }
-
-        // --- ENVÍO DE CORREO: NUEVA DONACIÓN ---
-        const asuntoNuevo = '¡Gracias por tu intención de donar al Hospital Güemes!';
-        const mensajeNuevo = `Hola ${nombreFinal},\n\nHemos registrado tu intención de donar "${cantidadFinal} unidades de ${categoria}".\nTu donación se encuentra en estado PENDIENTE de recepción en el hospital.\n\nPor favor, acércate a nuestras instalaciones para concretar la entrega.\n\n¡Muchas gracias por tu solidaridad!\nEquipo del Hospital Güemes.`;
-        enviarCorreo(correo, asuntoNuevo, mensajeNuevo);
-
         return res.status(201).json({ mensaje: 'Donación registrada como Pendiente.', id: result.rows[0].id });
     });
 });
@@ -276,31 +235,31 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
     }
 
     try {
-        const checkSql = "SELECT estado, descripcion, correo, nombre FROM donaciones WHERE id = $1";
+        const checkSql = "SELECT estado, descripcion FROM donaciones WHERE id = $1";
         const checkRes = await db.query(checkSql, [id]);
 
         if (checkRes.rows.length === 0) {
             return res.status(404).json({ error: 'Donación no encontrada.' });
         }
 
-        const donacionDB = checkRes.rows[0];
-        const estadoActual = donacionDB.estado || 'Pendiente';
-        const correoDonante = donacionDB.correo;
-        const nombreDonante = donacionDB.nombre;
+        const estadoActual = checkRes.rows[0].estado || 'Pendiente';
 
         if (estadoActual === 'Aprobado y Destinado' || estadoActual === 'Rechazado') {
             return res.status(400).json({ error: `Esta donación ya fue cerrada como "${estadoActual}" y no se puede modificar.` });
         }
 
-        if (estadoActual === 'Pendiente' && nuevoEstado !== 'Recibido' && nuevoEstado !== 'Rechazado') {
-            return res.status(400).json({ error: 'Una donación Pendiente debe pasar al estado "Recibido" o puede ser "Rechazada".' });
+        if (estadoActual === 'Pendiente' && nuevoEstado !== 'Recibido') {
+            return res.status(400).json({ error: 'Una donación Pendiente solo puede pasar al estado "Recibido".' });
         }
 
         if (estadoActual === 'Recibido' && (nuevoEstado !== 'Aprobado y Destinado' && nuevoEstado !== 'Rechazado')) {
             return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
         }
 
+        // Tomamos el nombre completo sin recortar (o por defecto 'Sistema' si viene vacío)
         const responsableFinal = actualizado_por ? String(actualizado_por).trim() : 'Sistema';
+        
+        // Obtenemos la fecha y hora exacta actual para registrar el momento de la modificación
         const fechaHoraActual = new Date();
 
         let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4 WHERE id = $2`;
@@ -310,7 +269,7 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             if (!motivoRechazo || motivoRechazo.trim() === '') {
                 return res.status(400).json({ error: 'Debe especificar el motivo del rechazo.' });
             }
-            const descripcionAnterior = donacionDB.descripcion || '';
+            const descripcionAnterior = checkRes.rows[0].descripcion || '';
             const descripcionConMotivo = `${descripcionAnterior} | [RECHAZADO: ${motivoRechazo.trim()}]`;
             
             sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4, descripcion = $5 WHERE id = $2`;
@@ -318,24 +277,6 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
         }
 
         await db.query(sql, valores);
-
-        // --- ENVÍO DE CORREO: ACTUALIZACIÓN DE ESTADO ---
-        let asuntoUpdate = '';
-        let mensajeUpdate = '';
-
-        if (nuevoEstado === 'Recibido') {
-            asuntoUpdate = 'Hemos recibido tu donación - Hospital Güemes';
-            mensajeUpdate = `Hola ${nombreDonante},\n\nTe informamos que hemos RECIBIDO tu donación en nuestras instalaciones. Nuestro personal procederá a clasificarla.\n\n¡Muchas gracias por tu tiempo y solidaridad!`;
-        } else if (nuevoEstado === 'Aprobado y Destinado') {
-            asuntoUpdate = 'Tu donación ha sido destinada - Hospital Güemes';
-            mensajeUpdate = `Hola ${nombreDonante},\n\n¡Excelentes noticias! Tu donación ha sido APROBADA Y DESTINADA con éxito. Gracias a tu aporte, hemos podido ayudar a quienes más lo necesitan.\n\nEl Hospital Güemes y la comunidad te lo agradecen.`;
-        } else if (nuevoEstado === 'Rechazado') {
-            asuntoUpdate = 'Actualización sobre tu donación - Hospital Güemes';
-            mensajeUpdate = `Hola ${nombreDonante},\n\nTe informamos que tu donación ha sido RECHAZADA por el siguiente motivo:\n"${motivoRechazo.trim()}"\n\nAgradecemos de todas formas tu intención de colaborar con el hospital.`;
-        }
-
-        enviarCorreo(correoDonante, asuntoUpdate, mensajeUpdate);
-
         return res.json({ mensaje: 'Estado actualizado con éxito.', nuevoEstado, fecha_actualizacion: fechaHoraActual });
     } catch (err) {
         console.error('Error al actualizar estado:', err);
@@ -345,6 +286,7 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
 
 // --- RUTAS DE GESTIÓN DE USUARIOS ---
 
+// GET: Obtener todos los usuarios
 app.get('/api/usuarios', async (req, res) => {
     try {
         const sql = "SELECT id, nombre_usuario, dni, nombre, rol FROM usuarios ORDER BY id DESC";
@@ -356,6 +298,7 @@ app.get('/api/usuarios', async (req, res) => {
     }
 });
 
+// POST: Crear un nuevo usuario
 app.post('/api/usuarios', async (req, res) => {
     const { nombre_usuario, nombre, contrasena, rol, dni } = req.body;
     const rolFinal = rol || 'usuario';
@@ -384,6 +327,7 @@ app.post('/api/usuarios', async (req, res) => {
     }
 });
 
+// DELETE: Eliminar usuario por ID
 app.delete('/api/usuarios/:id', async (req, res) => {
     const { id } = req.params;
 
