@@ -223,6 +223,35 @@ app.get('/api/donaciones/aprobadas', (req, res) => {
     });
 });
 
+// --- RUTA GET: REPORTE DE DONACIONES POR PERIODO ---
+app.get('/api/donaciones/reporte', async (req, res) => {
+    const { inicio, fin } = req.query;
+
+    if (!inicio || !fin) {
+        return res.status(400).json({ success: false, error: 'Debe proporcionar una fecha de inicio y una fecha de fin.' });
+    }
+
+    try {
+        // Filtramos abarcando todo el día de fin sumándole la hora límite
+        const sql = `
+            SELECT * FROM donaciones 
+            WHERE fecha >= $1::timestamp AND fecha <= ($2::date + INTERVAL '1 day' - INTERVAL '1 second')
+            ORDER BY fecha DESC
+        `;
+        const valores = [inicio, fin];
+        const resultado = await db.query(sql, valores);
+
+        return res.json({
+            success: true,
+            total: resultado.rows.length,
+            donaciones: resultado.rows
+        });
+    } catch (err) {
+        console.error('Error al generar el reporte de donaciones:', err);
+        return res.status(500).json({ success: false, error: 'Error interno del servidor al generar el reporte.' });
+    }
+});
+
 // --- RUTA PUT: ESTADO DONACIÓN ---
 app.put('/api/donaciones/:id/estado', async (req, res) => {
     const { id } = req.params;
@@ -256,10 +285,7 @@ app.put('/api/donaciones/:id/estado', async (req, res) => {
             return res.status(400).json({ error: 'Una donación Recibida solo puede pasar a "Aprobado y Destinado" o "Rechazado".' });
         }
 
-        // Tomamos el nombre completo sin recortar (o por defecto 'Sistema' si viene vacío)
         const responsableFinal = actualizado_por ? String(actualizado_por).trim() : 'Sistema';
-        
-        // Obtenemos la fecha y hora exacta actual para registrar el momento de la modificación
         const fechaHoraActual = new Date();
 
         let sql = `UPDATE donaciones SET estado = $1, actualizado_por = $3, fecha_actualizacion = $4 WHERE id = $2`;
