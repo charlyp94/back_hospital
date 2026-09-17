@@ -47,7 +47,7 @@ async function crearTablasSiNoExisten() {
             telefono VARCHAR(50),
             cantidad INTEGER DEFAULT 0,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            cuit VARCHAR(20) UNIQUE,
+            cuit VARCHAR(20),
             descripcion TEXT,
             actualizado_por VARCHAR(100),
             fecha_actualizacion TIMESTAMP
