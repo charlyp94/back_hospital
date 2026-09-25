@@ -79,7 +79,7 @@ async function limpiarDonacionesExpiradas() {
         const query = `
             DELETE FROM donaciones 
             WHERE estado = 'Pendiente' 
-            AND fecha < NOW() - INTERVAL '1 hour'
+            AND fecha < NOW() - INTERVAL '30 days'
         `;
         const resultado = await db.query(query);
         if (resultado.rowCount > 0) {
