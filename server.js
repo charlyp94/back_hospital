@@ -133,7 +133,10 @@ app.post('/api/donaciones', async (req, res) => {
         tipoDonante, nombreCompleto, nombreEmpresa, dni, fechaNacimiento,
         correo, categoria, ocultarNombre, genero, telefono, cantidad, cuit, descripcion
     } = req.body;
-
+     // === VALIDACIÓN: La descripción es obligatoria ===
+    if (!descripcion || descripcion.trim() === '') {
+        return res.status(400).json({ error: 'La descripción de la donación es obligatoria.' });
+    }
     const nombreFinal = (tipoDonante === 'empresa') ? nombreEmpresa : nombreCompleto;
     const dniFinal = (tipoDonante === 'persona') ? dni : null;
     const fechaNacFinal = (tipoDonante === 'persona') ? fechaNacimiento : null;
